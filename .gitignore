@@ -1,0 +1,57 @@
+# ========================
+# 1. SECRETE ȘI CHEI (CRITIC)
+# ========================
+.env
+.env.*
+*.pem
+*.key
+
+# ========================
+# 2. BAZE DE DATE (Datele userilor)
+# ========================
+*.db
+*.sqlite
+*.sqlite3
+
+# ========================
+# 3. FIȘIERELE UTILIZATORILOR (Poze, Video, etc.)
+# ========================
+simulated_storage/
+media/
+uploads/
+storage/
+
+# ========================
+# 4. MODELE AI ȘI CACHE
+# ========================
+hf_cache/
+.cache/
+.huggingface/
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# ========================
+# 5. MEDIUL PYTHON
+# ========================
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# ========================
+# 6. NODE.JS / REACT (Frontend)
+# ========================
+node_modules/
+dist/
+build/
+.npm/
+
+# ========================
+# 7. FIȘIERE DE SISTEM (OS)
+# ========================
+.DS_Store
+Thumbs.db

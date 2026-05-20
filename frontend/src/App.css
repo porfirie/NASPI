@@ -1,0 +1,29 @@
+/* App.css */
+
+/* Eliminăm orice urmă de alb la nivel de sistem */
+:root {
+  background-color: #0d1117;
+}
+
+html, body {
+  background-color: #0d1117 !important;
+  color: #f8fafc;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  /* Previne scroll-ul elastic care arată alb pe margini */
+  overflow: hidden; 
+  position: fixed;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto; /* Scroll-ul se face doar aici */
+  background-color: #0d1117;
+  
+  /* Împinge conținutul sub notch, dar fundalul rămâne negru */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
