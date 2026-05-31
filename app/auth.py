@@ -8,9 +8,9 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 try:
-    import models
+    import app.models
     from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
-    from database import get_db
+    from app.database import get_db
 except ImportError:
     from app import models
     from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES

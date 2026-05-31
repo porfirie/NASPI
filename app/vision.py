@@ -55,7 +55,7 @@ def process_image_with_ai(file_id: int, image_path: str, db_session):
         print(f"✅ [AI] REZULTAT: {answer}", flush=True)
         
         print("💾 [AI] Salvez în baza de date...", flush=True)
-        from models import FileIndex 
+        from app.models import FileIndex 
         
         file_record = db_session.query(FileIndex).filter(FileIndex.id == file_id).first()
         if file_record:

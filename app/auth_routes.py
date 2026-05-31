@@ -9,8 +9,8 @@ try:
     import auth
     from auth import get_current_user
     from config import ACCESS_TOKEN_EXPIRE_MINUTES
-    from database import get_db
-    import models
+    from app.database import get_db
+    import app.models
     from schemas import PasswordChange, UsernameChange
 except ImportError:
     from app import auth

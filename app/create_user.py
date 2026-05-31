@@ -4,8 +4,8 @@ import os
 # Ne asigurăm că Python se uită în folderul curent
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from database import SessionLocal, engine, Base
-from models import User  # Importăm DIRECT clasa User, nu tot modulul
+from app.database import SessionLocal, engine, Base
+from app.models import User  # Importăm DIRECT clasa User, nu tot modulul
 import auth
 
 def create_initial_user():

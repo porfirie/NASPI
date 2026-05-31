@@ -48,15 +48,23 @@ const Dashboard = ({ setToken }) => {
   const isSharedPath = currentPath.join('/').startsWith('Shared with me');
 
   useEffect(() => { fetchData(); }, [currentPath, refreshTrigger]);
+useEffect(() => {
+    if (!API_URL) return;
 
-  useEffect(() => {
-    if (API_URL) {
+    let socket;
+    let reconnectTimer;
+
+    const connectWebSocket = () => {
       try {
         const baseUrl = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
         const WS_URL = baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
-        const socket = new WebSocket(`${WS_URL}/ws`);
+        
+        socket = new WebSocket(`${WS_URL}/ws`);
 
-        socket.onopen = () => console.log("✅ Conectat la Live Server (Aether WS)");
+        socket.onopen = () => {
+          console.log("✅ Conectat la Live Server (Aether WS)");
+        };
+
         socket.onmessage = (event) => {
           try {
             const messageData = JSON.parse(event.data);
@@ -67,12 +75,41 @@ const Dashboard = ({ setToken }) => {
             if (messageData.type === "SYSTEM_STATS") {
               setSysStats(messageData);
             }
-          } catch (err) { console.error("Eroare WS:", err); }
+          } catch (err) { 
+            console.error("Eroare WS Parse:", err); 
+          }
         };
-        return () => socket.close();
-      } catch (err) { console.error("Eroare fatală la inițializarea WS:", err); }
-    }
-  }, []); // E foarte important ca array-ul de aici să rămână gol []!
+
+        // 🛡️ PROTECȚIA PENTRU TELEFOANE: Dacă pică, reîncearcă în 3 secunde
+        socket.onclose = () => {
+          console.log("⚠️ [WebSocket] Conexiune închisă de rețea/telefon. Reconectare în 3 sec.");
+          clearTimeout(reconnectTimer); // Ne asigurăm că nu facem spam de timere
+          reconnectTimer = setTimeout(connectWebSocket, 3000);
+        };
+
+        // Dacă dă eroare, îl închidem forțat (ceea ce va declanșa socket.onclose de mai sus)
+        socket.onerror = (err) => {
+          console.error("❌ Eroare WS:", err);
+          socket.close(); 
+        };
+
+      } catch (err) { 
+        console.error("Eroare fatală la inițializarea WS:", err); 
+      }
+    };
+
+    // Apelăm funcția pentru prima conectare
+    connectWebSocket();
+
+    // Curățenia la delogare / închiderea paginii
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (socket) {
+        socket.onclose = null; // Oprim auto-reconectarea intenționată când părăsim pagina
+        socket.close();
+      }
+    };
+  }, []); // E foarte important ca array-ul de aici să rămână gol [] - ai avut perfectă dreptate!
 
   const fetchData = async () => {
     try {

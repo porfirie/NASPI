@@ -13,16 +13,16 @@ from pydantic import BaseModel
 from sqlalchemy import or_, cast, String
 from sqlalchemy.orm import Session
 
-from events import manager, ai_state  # asigura-te ca il imporți corect
+from app.events import manager, ai_state  # asigura-te ca il imporți corect
 import time # Ai nevoie de time pentru sleep
 
 try:
-    from auth import get_current_user
-    from database import SessionLocal, get_db
-    from events import manager
-    from models import FileIndex, SharedFile, User
-    from services.ai_service import process_image_with_ai
-    from utils import get_dir_size, get_user_path, safe_join_user_path
+    from app.auth import get_current_user
+    from app.database import SessionLocal, get_db
+    from app.events import manager
+    from app.models import FileIndex, SharedFile, User
+    from app.services.ai_service import process_image_with_ai
+    from app.utils import get_dir_size, get_user_path, safe_join_user_path
 except ImportError:
     from app.auth import get_current_user
     from app.database import SessionLocal, get_db

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 try:
     import auth
     from auth import get_current_user
-    from database import get_db
+    from app.database import get_db
     import models
     from schemas import UserCreate, UserEdit
 except ImportError:

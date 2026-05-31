@@ -28,15 +28,15 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 
 
-from database import SessionLocal # Importăm "fabrica" de conexiuni la DB
+from app.database import SessionLocal # Importăm "fabrica" de conexiuni la DB
 from vision import process_image_with_ai # Importăm funcția noastră AI
 
 import traceback 
 
 # Importurile tale locale
-import auth
-import models
-from database import engine, Base, get_db
+import app.auth
+import app.models
+from app.database import engine, Base, get_db
 
 
 
@@ -203,7 +203,7 @@ app.add_middleware(
 )
 @app.get("/search")
 def search_files(q: str, use_ai: bool = False, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-    from models import FileIndex
+    from app.models import FileIndex
     import datetime
 
     if not q or q.strip() == "":
@@ -375,7 +375,7 @@ async def upload_files(
 
 @app.post("/sync-db")
 def sync_database(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
-    from models import FileIndex
+    from app.models import FileIndex
     import os
 
     user_root = get_user_path(current_user.username)

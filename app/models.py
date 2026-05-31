@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 try:
-    from database import Base
+    from app.database import Base
 except ImportError:
     from app.database import Base
 from datetime import datetime # Am păstrat doar importul corect

@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 try:
     from auth import get_current_user
-    from database import get_db
-    import models
+    from app.database import get_db
+    import app.models
     from utils import get_user_path, safe_join_user_path
 except ImportError:
     from app.auth import get_current_user

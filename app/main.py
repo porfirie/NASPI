@@ -6,24 +6,24 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from events import manager, ai_state
+from app.events import manager, ai_state
 
 try:
-    from config import CORS_ALLOW_ORIGIN_REGEX, STORAGE_PATH
+    from app.config import CORS_ALLOW_ORIGIN_REGEX, STORAGE_PATH
 except ImportError:
     from app.config import CORS_ALLOW_ORIGIN_REGEX, STORAGE_PATH
 
 try:
-    from events import manager
+    from app.events import manager
 except ImportError:
     from app.events import manager
 
 
 try:
-    from auth_routes import router as auth_router
-    from file_routes import router as file_router
-    from admin_routes import router as admin_router
-    from share_routes import router as share_router
+    from app.auth_routes import router as auth_router
+    from app.file_routes import router as file_router
+    from app.admin_routes import router as admin_router
+    from app.share_routes import router as share_router
 except ImportError:
     from app.auth_routes import router as auth_router
     from app.file_routes import router as file_router
