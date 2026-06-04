@@ -1,11 +1,16 @@
 import os
 from pathlib import Path
 from typing import Union
+import hashlib
+
+
 
 try:
     from config import STORAGE_PATH
+    from app.models import User
 except ImportError:
     from app.config import STORAGE_PATH
+    from app.models import User
 
 
 def is_subpath(base: Path, target: Path) -> bool:
@@ -29,8 +34,9 @@ def get_dir_size(start_path: Union[str, Path]) -> int:
     return total_size
 
 
-def get_user_path(username: str) -> Path:
-    user_folder = Path(STORAGE_PATH) / username
+def get_user_path(user_id: int) -> Path:
+    # Acum folderul va fi creat pe baza ID-ului (ex: storage/1)
+    user_folder = Path(STORAGE_PATH) / str(user_id)
     user_folder.mkdir(parents=True, exist_ok=True)
     return user_folder
 
@@ -49,3 +55,31 @@ def safe_join_user_path(user_root: Union[str, Path], relative_path: str, create:
         target.mkdir(parents=True, exist_ok=True)
 
     return target
+
+def _calculate_storage_stats(current_user: User, user_root: Path) -> dict:
+    user_quota_mb = current_user.storage_quota_mb
+    used_mb = get_dir_size(user_root) / (1024 * 1024)
+    free_mb = max(0, user_quota_mb - used_mb)
+    percent_used = (used_mb / user_quota_mb) * 100 if user_quota_mb > 0 else 100
+
+    return {
+        "total_gb": round(user_quota_mb / 1024, 2),
+        "used_gb": round(used_mb / 1024, 2),
+        "free_gb": round(free_mb / 1024, 2),
+        "app_usage_mb": round(used_mb, 2),
+        "percent_used": round(percent_used, 1),
+        "user_role": current_user.role
+    }
+
+def get_temp_file_path(user_root: Path, target_path: str, filename: str) -> Path:
+    """
+    Creează un nume unic și sigur pentru fișierul temporar.
+    Folosim MD5 ca să nu se încurce dacă urci două fișiere cu același nume în foldere diferite.
+    """
+    temp_dir = user_root / ".temp_uploads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    unique_string = f"{target_path}/{filename}".encode()
+    unique_name = hashlib.md5(unique_string).hexdigest()
+    
+    return temp_dir / f"{unique_name}.part"

@@ -20,17 +20,26 @@ except ImportError:
 
 
 try:
-    from app.auth_routes import router as auth_router
-    from app.file_routes import router as file_router
-    from app.admin_routes import router as admin_router
-    from app.share_routes import router as share_router
+    from app.routes.auth_routes import router as auth_router
+    from app.routes.file_routes import router as file_router
+    from app.routes.admin_routes import router as admin_router
+    from app.routes.share_routes import router as share_router
+    from app.routes.download_routes import router as download_router
+    from app.routes.upload_routes import router as upload_router
+    from app.routes.ai_routes import router as ai_router
 except ImportError:
-    from app.auth_routes import router as auth_router
-    from app.file_routes import router as file_router
-    from app.admin_routes import router as admin_router
-    from app.share_routes import router as share_router
+    from app.routes.auth_routes import router as auth_router
+    from app.routes.file_routes import router as file_router
+    from app.routes.admin_routes import router as admin_router
+    from app.routes.share_routes import router as share_router
+    from app.routes.download_routes import router as download_router
+    from app.routes.upload_routes import router as upload_router
+    from app.routes.ai_routes import router as ai_router
+
 
 app = FastAPI(title="NAS Pi Project API")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
@@ -39,11 +48,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/media", StaticFiles(directory=str(STORAGE_PATH)), name="media")
-app.include_router(auth_router)
-app.include_router(file_router)
-app.include_router(admin_router)
-app.include_router(share_router)
-
+app.router.include_router(auth_router)
+app.router.include_router(file_router)
+app.router.include_router(admin_router)
+app.router.include_router(share_router)
+app.router.include_router(download_router)
+app.router.include_router(upload_router)
+app.router.include_router(ai_router)
 prev_net_sent = psutil.net_io_counters().bytes_sent
 prev_net_recv = psutil.net_io_counters().bytes_recv
 

@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+import asyncio
+
 import torch
 from PIL import Image
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -8,9 +10,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 try:
     from app.models import FileIndex
     from app.config import HF_HOME, MODEL_ID
+    from app.events import ai_state
+    from app.database import SessionLocal
 except ImportError:
     from app.models import FileIndex
     from app.config import HF_HOME, MODEL_ID
+    from app.events import ai_state
+    from app.database import SessionLocal
 
 os.environ["HF_HOME"] = str(HF_HOME)
 os.environ["OMP_NUM_THREADS"] = "4"
@@ -48,7 +54,7 @@ def process_image_with_ai(file_id: int, image_path: str, db_session):
         print(" [AI] Procesez pixelii...", flush=True)
         with torch.no_grad():
             enc_image = model.encode_image(image)
-            prompt = "Describe this image in about 20 words, including objects, colors, and any notable features."
+            prompt = "Describe this image in about 10 words, including objects, colors, and any notable features."
             answer = model.answer_question(enc_image, prompt, tokenizer)
 
         print(f" [AI] REZULTAT: {answer}", flush=True)
@@ -62,3 +68,32 @@ def process_image_with_ai(file_id: int, image_path: str, db_session):
         print(f"[AI] Eroare la procesare: {e}", flush=True)
         import traceback
         traceback.print_exc()
+def ai_worker_sync(file_id: int, image_path: str):
+    # Deschidem o conexiune sigură cu baza de date
+    db_session = SessionLocal()
+    try:
+        process_image_with_ai(file_id, image_path, db_session)
+    finally:
+        # E CRUCIAL să o închidem, altfel Pi-ul rămâne fără memorie!
+        db_session.close()
+
+async def ai_background_worker(file_id: int, image_path: str):
+    try:
+        while ai_state.status == "paused":
+            await asyncio.sleep(2)
+            
+        if ai_state.status == "stopped":
+            return
+            
+        filename = os.path.basename(image_path)
+        ai_state.log(f"AI ENGINE: A preluat '{filename}'. Procesare...", "warning")
+        
+        # Apelăm funcția de mai sus care gestionează baza de date corect
+        await asyncio.to_thread(ai_worker_sync, file_id, image_path)
+        
+        ai_state.log(f"AI ENGINE: Analiză completă pentru '{filename}'.", "success")
+    except Exception as e:
+        ai_state.log(f"EROARE AI: {str(e)}", "error")
+        print(f"Eroare severă la AI Worker: {e}")
+    finally:
+        ai_state.queue_count = max(0, ai_state.queue_count - 1)

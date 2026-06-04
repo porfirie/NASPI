@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+import shutil
+from sqlalchemy import or_
+from app.utils import get_user_path
+
 try:
     import auth
     from auth import get_current_user
@@ -71,6 +75,25 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current_user: model
     if user_to_delete.id == current_user.id:
         raise HTTPException(status_code=400, detail="NU TE POȚI ȘTERGE SINGUR")
 
-    db.delete(user_to_delete)
-    db.commit()
-    return {"message": "Utilizator șters"}
+    try:
+        # 1. CURĂȚARE HARD DISK
+        user_folder = get_user_path(user_to_delete.id)
+        if user_folder.exists() and user_folder.is_dir():
+            shutil.rmtree(user_folder)
+
+        # 2. CURĂȚARE BAZĂ DE DATE (Share-uri și Index-uri)
+        db.query(models.SharedFile).filter(
+            or_(models.SharedFile.owner_id == user_to_delete.id, 
+                models.SharedFile.shared_with_id == user_to_delete.id)
+        ).delete(synchronize_session=False)
+
+        db.query(models.FileIndex).filter(models.FileIndex.owner_id == user_to_delete.id).delete(synchronize_session=False)
+
+        # 3. ȘTERGERE CONT
+        db.delete(user_to_delete)
+        db.commit()
+        return {"message": "Utilizatorul și toate fișierele sale au fost șterse complet."}
+    
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Eroare la curățarea datelor: {e}")

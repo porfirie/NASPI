@@ -159,7 +159,7 @@ const SearchModal = ({ isOpen, onClose, API_URL, onFileSelect }) => {
 
             // 4. Construim link-ul corect pentru endpoint-ul tău de /media
             const baseUrl = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
-            const mediaUrl = `${baseUrl}/media/${username}/${folderPath}${file.name}`;
+            const mediaUrl = `${baseUrl}/media/${file.owner_id}/${folderPath}${file.name}`;
             
             return (
               <div 

@@ -191,7 +191,7 @@ const FileBrowser = ({
 
               <div className="flex-1 p-3 flex items-center justify-center relative pointer-events-none">
                 {file.name.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
-                  <img src={`${API_URL}/media/${file.username}/${filePath}`} className={`absolute inset-0 w-full h-full object-cover transition-all ${isSelectionMode && selectedFiles.includes(filePath) ? 'opacity-100 grayscale-0' : 'opacity-60 grayscale-[40%]'}`} draggable="false" />
+                  <img src={`${API_URL}/media/${file.owner_id}/${filePath}`} className={`absolute inset-0 w-full h-full object-cover transition-all ${isSelectionMode && selectedFiles.includes(filePath) ? 'opacity-100 grayscale-0' : 'opacity-60 grayscale-[40%]'}`} draggable="false" />
                 ) : (
                   <div className={`transition-opacity ${selectedFiles.includes(filePath) ? 'opacity-100' : 'opacity-20'}`}>
                     {file.name.match(/\.(mp4|mov|avi)$/i) ? <Video size={36} /> : <FileText size={36} />}

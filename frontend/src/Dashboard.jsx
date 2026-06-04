@@ -3,7 +3,6 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HardDrive, LogOut, ChevronRight, User, MoveHorizontal, Download, Trash2, X, Loader, Share2, Copy, Edit3, CloudUpload } from 'lucide-react';
 
-
 import FileViewer from './FileViewer';
 import StorageMap from './StorageMap';
 import SystemMonitor from './SystemMonitor';
@@ -37,7 +36,7 @@ const Dashboard = ({ setToken }) => {
 
   const [showFabMenu, setShowFabMenu] = useState(false);
   const [currentPath, setCurrentPath] = useState([]);
-  const [refreshTrigger, setRefreshTrigger] = useState(0); // <--- ADAUGĂ ASTA
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [sysStats, setSysStats] = useState(null);
   const [showFolderSelector, setShowFolderSelector] = useState(false);
   const [folderActionMode, setFolderActionMode] = useState('move');
@@ -48,7 +47,8 @@ const Dashboard = ({ setToken }) => {
   const isSharedPath = currentPath.join('/').startsWith('Shared with me');
 
   useEffect(() => { fetchData(); }, [currentPath, refreshTrigger]);
-useEffect(() => {
+
+  useEffect(() => {
     if (!API_URL) return;
 
     let socket;
@@ -58,7 +58,7 @@ useEffect(() => {
       try {
         const baseUrl = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
         const WS_URL = baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
-        
+
         socket = new WebSocket(`${WS_URL}/ws`);
 
         socket.onopen = () => {
@@ -69,47 +69,55 @@ useEffect(() => {
           try {
             const messageData = JSON.parse(event.data);
             if (messageData.type === "REFRESH_FILES") {
-              // 🚨 AICI E MAGIA: Nu mai chemăm fetchData(), ci declanșăm refresh-ul sigur
               setRefreshTrigger(prev => prev + 1);
             }
             if (messageData.type === "SYSTEM_STATS") {
               setSysStats(messageData);
             }
-          } catch (err) { 
-            console.error("Eroare WS Parse:", err); 
+          } catch (err) {
+            console.error("Eroare WS Parse:", err);
           }
         };
 
-        // 🛡️ PROTECȚIA PENTRU TELEFOANE: Dacă pică, reîncearcă în 3 secunde
         socket.onclose = () => {
           console.log("⚠️ [WebSocket] Conexiune închisă de rețea/telefon. Reconectare în 3 sec.");
-          clearTimeout(reconnectTimer); // Ne asigurăm că nu facem spam de timere
+          clearTimeout(reconnectTimer);
           reconnectTimer = setTimeout(connectWebSocket, 3000);
         };
 
-        // Dacă dă eroare, îl închidem forțat (ceea ce va declanșa socket.onclose de mai sus)
         socket.onerror = (err) => {
           console.error("❌ Eroare WS:", err);
-          socket.close(); 
+          socket.close();
         };
 
-      } catch (err) { 
-        console.error("Eroare fatală la inițializarea WS:", err); 
+      } catch (err) {
+        console.error("Eroare fatală la inițializarea WS:", err);
       }
     };
 
-    // Apelăm funcția pentru prima conectare
     connectWebSocket();
 
-    // Curățenia la delogare / închiderea paginii
     return () => {
       clearTimeout(reconnectTimer);
       if (socket) {
-        socket.onclose = null; // Oprim auto-reconectarea intenționată când părăsim pagina
+        socket.onclose = null;
         socket.close();
       }
     };
-  }, []); // E foarte important ca array-ul de aici să rămână gol [] - ai avut perfectă dreptate!
+  }, []);
+
+  // LACĂT PENTRU REFRESH ACCIDENTAL
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (uploading) {
+        e.preventDefault();
+        e.returnValue = ''; // Obligatoriu pentru Chrome/Safari
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [uploading]);
 
   const fetchData = async () => {
     try {
@@ -125,7 +133,7 @@ useEffect(() => {
 
   const formatBytes = (bytes) => {
     if (bytes === 0) return '0 MB';
-    const k = 1024 * 1024; // Convertim direct în MB
+    const k = 1024 * 1024;
     return (bytes / k).toFixed(1) + ' MB';
   };
 
@@ -145,6 +153,7 @@ useEffect(() => {
     } catch (err) { alert("Eroare: " + (err.response?.data?.detail || "Nu am putut crea folderul")); }
   };
 
+
   const handleUpload = async (event) => {
     const files = event.target.files;
     if (!files.length) return;
@@ -152,29 +161,93 @@ useEffect(() => {
     const folderPath = currentPath.join('/');
     if (folderPath.startsWith('Shared with me')) {
       event.target.value = null;
-      alert('Nu poți încărca fișiere direct în folderul "Shared with me". Navighează în propriul folder și încarcă de acolo.');
+      alert('Nu poți încărca fișiere direct în folderul "Shared with me".');
       return;
     }
 
-    const formData = new FormData();
-    for (let i = 0; i < files.length; i++) formData.append("files", files[i]);
-    formData.append("target_path", folderPath);
+    setUploading(true);
+    setProgress(0);
 
-    setUploading(true); setProgress(0);
+    const totalJobSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
+    let totalUploadedSoFar = 0;
+    setUploadTotal(totalJobSize);
+    setUploadLoaded(0);
+
+    const token = localStorage.getItem('token');
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
+    const MAX_RETRIES = 5; // Câte încercări facem înainte să dăm bătută
+    const RETRY_DELAY_MS = 3000; // Așteptăm 3 secunde între încercări
+
+    // Funcție de pauză (Sleep)
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
     try {
-      const token = localStorage.getItem('token');
-      await axios.post(`${API_URL}/upload`, formData, {
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent) => {
-          setProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
-          setUploadLoaded(progressEvent.loaded); // <-- Salvăm cât s-a încărcat
-          setUploadTotal(progressEvent.total);   // <-- Salvăm totalul
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+
+        // HANDSHAKE INITIAL
+        const statusRes = await axios.get(`${API_URL}/upload/status`, {
+          params: { filename: file.name, target_path: folderPath, total_size: file.size },
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        let uploadedBytes = statusRes.data.uploadedBytes;
+        totalUploadedSoFar += uploadedBytes;
+
+        // CHUNKING CU RETRY AUTOMAT
+        while (uploadedBytes < file.size) {
+          const chunk = file.slice(uploadedBytes, uploadedBytes + CHUNK_SIZE);
+
+          const formData = new FormData();
+          formData.append("file", chunk);
+          formData.append("filename", file.name);
+          formData.append("target_path", folderPath);
+          formData.append("offset", uploadedBytes);
+          formData.append("total_size", file.size);
+
+          let chunkSuccess = false;
+          let retries = 0;
+// BUCLA DE ÎNCĂPĂȚÂNARE INTELIGENTĂ
+          while (!chunkSuccess && retries < MAX_RETRIES) {
+            // Dacă telefonul știe clar că e offline, așteptăm. Nu irosim încercările.
+            if (!navigator.onLine) {
+              console.warn("Fără semnal... punem upload-ul pe pauză.");
+              await sleep(3000); // Verificăm din nou peste 3 secunde
+              continue; 
+            }
+
+            try {
+              await axios.post(`${API_URL}/upload/chunk`, formData, {
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
+                onUploadProgress: (progressEvent) => {
+                  const currentGlobalLoaded = totalUploadedSoFar + progressEvent.loaded;
+                  setUploadLoaded(currentGlobalLoaded);
+                  setProgress(Math.round((currentGlobalLoaded * 100) / totalJobSize));
+                }
+              });
+              
+              chunkSuccess = true; // Succes!
+            } catch (chunkError) {
+              retries++;
+              console.warn(`Eroare la trimitere. Reîncerc felia (${retries}/${MAX_RETRIES})...`);
+              
+              if (retries >= MAX_RETRIES) {
+                throw new Error(`Am pierdut conexiunea la server pentru fișierul ${file.name}.`);
+              }
+              
+              await sleep(RETRY_DELAY_MS);
+            }
+          }
+          // Mutăm cursorul doar DUPĂ ce felia a fost trimisă garantat
+          uploadedBytes += CHUNK_SIZE;
+          totalUploadedSoFar += chunk.size;
         }
-      });
+      }
+
       await fetchData();
     } catch (err) {
-      console.error('Upload error:', err);
-      alert("Eroare la upload: " + (err.response?.data?.detail || err.message || "Nu am putut încărca fișierul"));
+      console.error('Eroare finală la Upload:', err);
+      alert("Upload oprit: " + (err.response?.data?.detail || err.message));
     } finally {
       event.target.value = null;
       setTimeout(() => { setUploading(false); setProgress(0); }, 1000);
@@ -202,10 +275,8 @@ useEffect(() => {
     }
   };
 
+  // NOUA FUNCȚIE CU SISTEM DE BILET
   const handleBulkDownload = async () => {
-    if (selectedFiles.length === 0) return;
-
-    // REPARATIE: Excludem directoarele din selecție dacă s-au strecurat
     const filesToDownload = selectedFiles.filter(f => !f.endsWith('/'));
 
     if (filesToDownload.length === 0) {
@@ -213,28 +284,40 @@ useEffect(() => {
       return;
     }
 
-    setIsZipping(true);
-    try {
-      const token = localStorage.getItem('token');
-      // REPARATIE: Ne asigurăm că trimitem un array curat către Python
-      const response = await axios.post(`${API_URL}/download-zip`, filesToDownload, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        responseType: 'blob',
-      });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a'); link.href = url;
-      link.setAttribute('download', 'Aether_Files.zip');
-      document.body.appendChild(link); link.click(); link.remove();
-      window.URL.revokeObjectURL(url);
-      setIsSelectionMode(false); setSelectedFiles([]);
-    } catch (err) {
-      console.error("Eroare ZIP:", err);
-      alert("Eroare la crearea arhivei. Verifică consola pentru detalii.");
+    const token = localStorage.getItem('token');
+
+    // SCENARIUL 1: 1 singur fișier
+    if (filesToDownload.length === 1 && !selectedIsFolder) {
+      const encodedPath = filesToDownload[0].split('/').map(encodeURIComponent).join('/');
+      window.location.href = `${API_URL}/download/${encodedPath}${token ? `?access_token=${encodeURIComponent(token)}` : ''}`;
+
+      setIsSelectionMode(false);
+      setSelectedFiles([]);
+      return;
     }
-    finally { setIsZipping(false); }
+
+    // SCENARIUL 2: ZIP On-The-Fly cu Bilet (Fără Erori de Token!)
+    setIsZipping(true);
+
+    try {
+      const response = await axios.post(`${API_URL}/prepare-zip`,
+        { paths: filesToDownload },
+        { headers: { 'Authorization': `Bearer ${token}` } }
+      );
+
+      const sessionId = response.data.session_id;
+
+      // Declansam descărcarea prin browser
+      window.location.href = `${API_URL}/download-zip/${sessionId}`;
+
+    } catch (err) {
+      console.error("Eroare la pregătirea arhivei:", err);
+      alert("A apărut o eroare de comunicare cu serverul.");
+    } finally {
+      setIsZipping(false);
+      setIsSelectionMode(false);
+      setSelectedFiles([]);
+    }
   };
 
   const handleMoveFiles = async (destPath) => {
@@ -384,7 +467,7 @@ useEffect(() => {
         showProfile={showProfile}
         setShowProfile={setShowProfile}
         userRole={data?.storage_stats?.user_role}
-        username={data?.categories?.folders ? currentPath.length === 0 ? localStorage.getItem('token') ? JSON.parse(atob(localStorage.getItem('token').split('.')[1])).sub : "User" : "User" : "User"} // A simple hack to decode username from JWT, or you can just pass the decoded token state if you have it.
+        username={data?.categories?.folders ? currentPath.length === 0 ? localStorage.getItem('token') ? JSON.parse(atob(localStorage.getItem('token').split('.')[1])).sub : "User" : "User" : "User"}
         apiUrl={API_URL}
       />
 
@@ -431,68 +514,86 @@ useEffect(() => {
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
             className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[60] flex items-center p-1.5 bg-black/40 backdrop-blur-xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
           >
-            {/* Counter Badge - Subtil */}
-            <div className="flex items-center justify-center h-9 px-4 bg-white/5 rounded-full text-slate-200 font-medium text-xs mx-1">
-              {selectedFiles.length}
-            </div>
+            {isZipping ? (
+              // STAREA DE PREGĂTIRE ZIP (Ultra-Minimalist, Aliniată cu Iconițele)
+              <>
+                <div className="flex items-center gap-2.5 h-10 px-4 text-slate-300 font-light text-xs tracking-wide">
+                  <Loader className="animate-spin opacity-80" size={16} />
+                  <span>
+                    Se arhivează... <span className="opacity-50 ml-1">({selectedFiles.filter(f => !f.endsWith('/')).length})</span>
+                  </span>
+                </div>
 
-            <div className="w-px h-5 bg-white/10 mx-2" />
+                <div className="w-px h-5 bg-white/10 mx-2" />
 
-            {/* Butoane Acțiuni Standard - Muted */}
-            <div className="flex items-center gap-1">
-              {[
-                { icon: Share2, title: "Partajează", onClick: () => setShowShareModal(true), disabled: selectedFiles.length === 0 },
-                { icon: Loader, title: "Descarcă ZIP", onClick: handleBulkDownload, disabled: isZipping || selectedFiles.length === 0, isLoader: true },
-                { icon: Copy, title: "Copiază", onClick: () => { setFolderActionMode('copy'); setShowFolderSelector(true); }, disabled: selectedFiles.length === 0 || selectedHasSharedItems },
-                { icon: MoveHorizontal, title: "Mută", onClick: () => { setFolderActionMode('move'); setShowFolderSelector(true); }, disabled: selectedFiles.length === 0 || selectedHasSharedItems },
-                { icon: Edit3, title: "Redenumește Folder", onClick: handleRenameFolder, disabled: !selectedFolder },
-              ].map((btn, index) => (
                 <button
-                  key={index}
-                  onClick={btn.onClick}
-                  disabled={btn.disabled}
-                  title={btn.title}
-                  className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:bg-white/10 hover:text-white transition-all disabled:opacity-30 disabled:hover:bg-transparent"
+                  onClick={() => { setIsSelectionMode(false); setSelectedFiles([]); setIsZipping(false); }}
+                  className="w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-slate-400 hover:bg-white/10 hover:text-white transition-all mr-1"
+                  title="Ascunde în fundal"
                 >
-                  {btn.isLoader && isZipping ? (
-                    <Loader className="animate-spin" size={18} />
-                  ) : btn.isLoader ? (
-                    <Download size={18} />
-                  ) : (
-                    <btn.icon size={18} />
-                  )}
+                  <X size={18} />
                 </button>
-              ))}
-            </div>
+              </>
+            ) : (
+              // STAREA NORMALĂ (Butoanele tale clasice de acțiuni)
+              <>
+                {/* Counter Badge - Subtil */}
+                <div className="flex items-center justify-center h-9 px-4 bg-white/5 rounded-full text-slate-300 font-medium text-xs mx-1">
+                  {selectedFiles.length}
+                </div>
 
-            <div className="w-px h-5 bg-white/10 mx-2" />
+                <div className="w-px h-5 bg-white/10 mx-2" />
 
-            {/* Ștergere - Roșu stins */}
-            <button
-              onClick={handleBulkDelete}
-              disabled={selectedFiles.length === 0 || selectedHasSharedItems}
-              className="w-10 h-10 flex items-center justify-center rounded-full text-rose-500/70 hover:bg-rose-500/20 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-              title="Șterge"
-            >
-              <Trash2 size={18} />
-            </button>
+                {/* Butoane Acțiuni Standard - Muted */}
+                <div className="flex items-center gap-1">
+                  {[
+                    { icon: Share2, title: "Partajează", onClick: () => setShowShareModal(true), disabled: selectedFiles.length === 0 },
+                    { icon: Download, title: "Descarcă", onClick: handleBulkDownload, disabled: selectedFiles.length === 0 },
+                    { icon: Copy, title: "Copiază", onClick: () => { setFolderActionMode('copy'); setShowFolderSelector(true); }, disabled: selectedFiles.length === 0 || selectedHasSharedItems },
+                    { icon: MoveHorizontal, title: "Mută", onClick: () => { setFolderActionMode('move'); setShowFolderSelector(true); }, disabled: selectedFiles.length === 0 || selectedHasSharedItems },
+                    { icon: Edit3, title: "Redenumește Folder", onClick: handleRenameFolder, disabled: !selectedFolder },
+                  ].map((btn, index) => (
+                    <button
+                      key={index}
+                      onClick={btn.onClick}
+                      disabled={btn.disabled}
+                      title={btn.title}
+                      className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:bg-white/10 hover:text-white transition-all disabled:opacity-30 disabled:hover:bg-transparent"
+                    >
+                      <btn.icon size={18} />
+                    </button>
+                  ))}
+                </div>
 
-            <div className="w-px h-5 bg-white/10 mx-2" />
+                <div className="w-px h-5 bg-white/10 mx-2" />
 
-            {/* Anulare (X) */}
-            <button
-              onClick={() => { setIsSelectionMode(false); setSelectedFiles([]); }}
-              className="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 text-slate-400 hover:bg-white/20 hover:text-white transition-all mr-1"
-              title="Anulează selecția"
-            >
-              <X size={18} />
-            </button>
+                {/* Ștergere - Roșu stins */}
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={selectedFiles.length === 0 || selectedHasSharedItems}
+                  className="w-10 h-10 flex items-center justify-center rounded-full text-rose-500/50 hover:bg-rose-500/20 hover:text-rose-400 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                  title="Șterge"
+                >
+                  <Trash2 size={18} />
+                </button>
 
+                <div className="w-px h-5 bg-white/10 mx-2" />
+
+                {/* Anulare (X) */}
+                <button
+                  onClick={() => { setIsSelectionMode(false); setSelectedFiles([]); }}
+                  className="w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-slate-500 hover:bg-white/10 hover:text-slate-300 transition-all mr-1"
+                  title="Anulează selecția"
+                >
+                  <X size={18} />
+                </button>
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
 
-     {/* BARA DE PROGRES PENTRU UPLOAD (Stil Dark Frosted Glass) */}
+      {/* BARA DE PROGRES PENTRU UPLOAD (Stil Dark Frosted Glass) */}
       <AnimatePresence>
         {uploading && (
           <motion.div
@@ -511,15 +612,15 @@ useEffect(() => {
                 <div className="flex justify-between items-end mb-0.5">
                   <h4 className="text-[10px] sm:text-[11px] font-bold text-slate-200 tracking-widest uppercase truncate">Se încarcă</h4>
                   {uploadTotal > 0 && (
-                     <span className="text-[8px] sm:text-[9px] text-slate-400 font-mono tracking-wider shrink-0 ml-2">
-                       {formatBytes(uploadLoaded)} / {formatBytes(uploadTotal)}
-                     </span>
+                    <span className="text-[8px] sm:text-[9px] text-slate-400 font-mono tracking-wider shrink-0 ml-2">
+                      {formatBytes(uploadLoaded)} / {formatBytes(uploadTotal)}
+                    </span>
                   )}
                 </div>
                 <p className="text-[9px] sm:text-[10px] text-slate-500 font-mono">{progress}% finalizat</p>
               </div>
             </div>
-            
+
             {/* Bara de progres fină */}
             <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
               <motion.div
@@ -532,7 +633,6 @@ useEffect(() => {
           </motion.div>
         )}
       </AnimatePresence>
-
 
       <AnimatePresence>{showViewer && <FileViewer isOpen={showViewer} onClose={() => setShowViewer(false)} currentFile={selectedPreview} allFiles={getFilesToRender()} apiUrl={API_URL} />}</AnimatePresence>
 

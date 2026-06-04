@@ -35,10 +35,9 @@ const FileViewer = ({ isOpen, onClose, currentFile, allFiles, apiUrl }) => {
       ? `${file.path}/${file.name}` 
       : (file.path && file.path !== "Root" ? file.path : file.name);
 
-  // Adăugăm un fallback pentru username în caz că lipsește
-  const username = file.username || "admin"; // Schimbă cu extragerea din token dacă e nevoie
+ 
 
-  const fileUrl = `${apiUrl}/media/${username}/${filePath}`;
+  const fileUrl = `${apiUrl}/media/${file.owner_id}/${filePath}`;
 
   // Navigarea stânga/dreapta merge doar dacă NU suntem în modul "Standalone / Search"
   const nextFile = () => {

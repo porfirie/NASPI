@@ -1,38 +1,31 @@
-import asyncio
-import io
 import os
 import shutil
-import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, cast, String
 from sqlalchemy.orm import Session
 
-from app.events import manager, ai_state  # asigura-te ca il imporți corect
-import time # Ai nevoie de time pentru sleep
+
+
+from app.events import manager
 
 try:
     from app.auth import get_current_user
-    from app.database import SessionLocal, get_db
-    from app.events import manager
+    from app.database import get_db
     from app.models import FileIndex, SharedFile, User
-    from app.services.ai_service import process_image_with_ai
-    from app.utils import get_dir_size, get_user_path, safe_join_user_path
+    from app.utils import get_user_path, safe_join_user_path, _calculate_storage_stats
+    from app.schemas import FolderCreate, MoveRequest, CopyFilesRequest, RenameFolderRequest, DeleteMultipleRequest
 except ImportError:
     from app.auth import get_current_user
-    from app.database import SessionLocal, get_db
-    from app.events import manager
+    from app.database import get_db
     from app.models import FileIndex, SharedFile, User
-    from app.services.ai_service import process_image_with_ai
-    from app.utils import get_dir_size, get_user_path, safe_join_user_path
+    from app.utils import get_user_path, safe_join_user_path, _calculate_storage_stats
+    from app.schemas import FolderCreate, MoveRequest, CopyFilesRequest, RenameFolderRequest, DeleteMultipleRequest
 
 router = APIRouter()
-
 
 @router.get("/search")
 def search_files(q: str, use_ai: bool = False, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -59,39 +52,16 @@ def search_files(q: str, use_ai: bool = False, db: Session = Depends(get_db), cu
             "name": f.filename,
             "path": folder,
             "size": f.size_kb,
-            "date": "Sincronizat"
+            "date": "Sincronizat",
+            "owner_id": current_user.id
         })
 
     return formatted_results
 
 
-class FolderCreate(BaseModel):
-    path: str
-    folder_name: str
-
-
-class MoveRequest(BaseModel):
-    source_paths: List[str]
-    destination_folder: str
-
-
-class DeleteMultipleRequest(BaseModel):
-    filenames: List[str]
-
-
-class CopyFilesRequest(BaseModel):
-    source_paths: List[str]
-    destination_folder: str
-
-
-class RenameFolderRequest(BaseModel):
-    folder_path: str
-    new_name: str
-
-
 @router.post("/create-folder")
 async def create_folder(data: FolderCreate, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     target_dir = safe_join_user_path(user_root, Path(data.path) / data.folder_name)
 
     if target_dir.exists():
@@ -104,7 +74,7 @@ async def create_folder(data: FolderCreate, current_user: User = Depends(get_cur
 
 @router.post("/move")
 async def move_files(data: MoveRequest, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     dest_dir = safe_join_user_path(user_root, data.destination_folder, create=True)
 
     errors = []
@@ -134,7 +104,7 @@ async def copy_files(data: CopyFilesRequest, db: Session = Depends(get_db), curr
     if data.destination_folder.startswith("Shared with me"):
         raise HTTPException(status_code=400, detail="Nu poți copia fișiere direct în folderul 'Shared with me'.")
 
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     dest_dir = safe_join_user_path(user_root, data.destination_folder, create=True)
 
     errors = []
@@ -183,7 +153,7 @@ async def rename_folder(data: RenameFolderRequest, db: Session = Depends(get_db)
     if not data.new_name or data.new_name.strip() == "" or "/" in data.new_name or data.new_name in (".", ".."):
         raise HTTPException(status_code=400, detail="Nume de folder invalid.")
 
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     old_folder = safe_join_user_path(user_root, data.folder_path)
     if not old_folder.exists() or not old_folder.is_dir():
         raise HTTPException(status_code=404, detail="Folderul nu a fost găsit.")
@@ -223,110 +193,9 @@ async def rename_folder(data: RenameFolderRequest, db: Session = Depends(get_db)
     return {"status": "ok", "new_path": new_prefix}
 
 
-def ai_worker_sync(file_id: int, image_path: str):
-    db_session = SessionLocal()
-    try:
-        process_image_with_ai(file_id, image_path, db_session)
-    finally:
-        db_session.close()
-
-
-async def ai_background_worker(file_id: int, image_path: str):
-    try:
-        # 1. Cât timp e pe pauză, firul de execuție așteaptă liniștit
-        while ai_state.status == "paused":
-            await asyncio.sleep(2)
-            
-        # 2. Dacă a fost oprit (stop), anulăm task-ul complet
-        if ai_state.status == "stopped":
-            return
-            
-        filename = os.path.basename(image_path)
-        ai_state.log(f"AI ENGINE: A preluat '{filename}'. Procesare...", "warning")
-        
-        # Procesarea reală
-        await asyncio.to_thread(ai_worker_sync, file_id, image_path)
-        
-        ai_state.log(f"AI ENGINE: Analiză completă pentru '{filename}'.", "success")
-    except Exception as e:
-        ai_state.log(f"EROARE AI: {str(e)}", "error")
-    finally:
-        # Când termină, scade numărul din coadă, dar să nu scadă sub 0
-        ai_state.queue_count = max(0, ai_state.queue_count - 1)
-
-
-@router.post("/upload")
-async def upload_files(
-    background_tasks: BackgroundTasks,
-    files: List[UploadFile] = File(...),
-    target_path: str = Form(""),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    if target_path.startswith("Shared with me"):
-        raise HTTPException(status_code=400, detail="Nu poți încărca fișiere direct în folderul 'Shared with me'.")
-
-    user_root = get_user_path(current_user.username)
-    target_dir = safe_join_user_path(user_root, target_path, create=True)
-
-    current_size_bytes = get_dir_size(user_root)
-    incoming_size_bytes = 0
-    for f in files:
-        f.file.seek(0, os.SEEK_END)
-        incoming_size_bytes += f.file.tell()
-        f.file.seek(0)
-
-    if (current_size_bytes + incoming_size_bytes) > (current_user.storage_quota_mb * 1024 * 1024):
-        raise HTTPException(status_code=400, detail="Cotă depășită!")
-
-    # Aici vom ține minte dacă a picat vreun fișier
-    errors = []
-    files_uploaded = False
-
-    for file in files:
-        file_location = target_dir / file.filename
-        
-        # 🚨 PROTECȚIA NOUĂ: Verificăm dacă fișierul fizic există deja pe disc!
-        if file_location.exists():
-            errors.append(f"Fișierul '{file.filename}' există deja.")
-            continue # Sărim peste el, nu îl salvăm pe disc și nu îl punem în DB
-
-        # 1. Salvăm fizic pe disc
-        with open(file_location, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        # 2. Adăugăm în baza de date o singură dată
-        new_file_index = FileIndex(
-            filename=file.filename,
-            folder_path=target_path,
-            size_kb=round(file_location.stat().st_size / 1024, 2),
-            owner_id=current_user.id,
-        )
-        db.add(new_file_index)
-        db.flush()
-        db.refresh(new_file_index)
-        
-        # 3. Trimitem la AI
-        background_tasks.add_task(ai_background_worker, new_file_index.id, str(file_location))
-        files_uploaded = True
-
-        ai_state.queue_count += 1
-        ai_state.log(f"UPLOAD: '{file.filename}' salvat.", "info")
-
-    db.commit()
-    
-    if files_uploaded:
-        await manager.broadcast({"type": "REFRESH_FILES", "message": "New upload"})
-        
-    # Dacă au fost erori (fișiere dublate), trimitem la Frontend ca să îți arate pop-up
-    if errors:
-        raise HTTPException(status_code=400, detail=" | ".join(errors))
-
-    return {"status": "ok"}
-
 @router.post("/sync-db")
 def sync_database(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
 
     db_files = db.query(FileIndex).filter(FileIndex.owner_id == current_user.id).all()
     db_file_map = {}
@@ -367,20 +236,11 @@ def sync_database(db: Session = Depends(get_db), current_user: User = Depends(ge
     return {"message": "Sincronizare completă!", "added": added_count, "removed": removed_count}
 
 
-@router.get("/download/{file_path:path}")
-def download_file(file_path: str, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
-    full_path = safe_join_user_path(user_root, file_path)
-
-    if not full_path.exists() or not full_path.is_file():
-        raise HTTPException(status_code=404, detail="Fișierul nu a fost găsit.")
-
-    return FileResponse(path=str(full_path), filename=full_path.name, media_type='application/octet-stream')
 
 
 @router.delete("/delete/{file_path:path}")
 async def delete_file(file_path: str, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     full_path = safe_join_user_path(user_root, file_path)
 
     if not full_path.exists():
@@ -399,7 +259,7 @@ async def delete_file(file_path: str, current_user: User = Depends(get_current_u
 
 @router.post("/delete-multiple")
 async def delete_multiple(data: DeleteMultipleRequest, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     deleted = []
     errors = []
 
@@ -425,38 +285,18 @@ async def delete_multiple(data: DeleteMultipleRequest, current_user: User = Depe
 
     return {"message": "Proces finalizat", "deleted": deleted, "errors": errors}
 
-
-# --- FUNCȚIE AJUTĂTOARE (Pusă deasupra rutei de dashboard) ---
-def _calculate_storage_stats(current_user: User, user_root: Path) -> dict:
-    """Calculează statisticile de stocare o singură dată pentru a păstra codul curat."""
-    user_quota_mb = current_user.storage_quota_mb
-    used_mb = get_dir_size(user_root) / (1024 * 1024)
-    free_mb = max(0, user_quota_mb - used_mb)
-    percent_used = (used_mb / user_quota_mb) * 100 if user_quota_mb > 0 else 100
-
-    return {
-        "total_gb": round(user_quota_mb / 1024, 2),
-        "used_gb": round(used_mb / 1024, 2),
-        "free_gb": round(free_mb / 1024, 2),
-        "app_usage_mb": round(used_mb, 2),
-        "percent_used": round(percent_used, 1),
-        "user_role": current_user.role
-    }
-
-
 @router.get("/dashboard")
 def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     media_exts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.mkv']
-    user_root = Path(get_user_path(current_user.username))
+    
+    # 1. MODIFICAT AICI: Folosim ID-ul pentru a afla folderul fizic!
+    user_root = Path(get_user_path(current_user.id))
+    
     categories = {"folders": [], "media": [], "documents": []}
 
-    # ==========================================
-    # 1. SCENARIUL A: FOLDERUL VIRTUAL DE SHARE
-    # ==========================================
     if path.startswith("Shared with me"):
         parts = path.split("/")
         
-        # NIVELUL 1: Rădăcina "Shared with me" (Arată Userii)
         if len(parts) == 1:
             shared_records = db.query(SharedFile).filter(SharedFile.shared_with_id == current_user.id).all()
             unique_owners = {r.owner_id for r in shared_records if not r.expires_at or r.expires_at > datetime.utcnow()}
@@ -465,13 +305,12 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
                 owner = db.query(User).filter(User.id == owner_id).first()
                 if owner:
                     categories["folders"].append({
-                        "name": owner.username,
+                        "name": owner.username, # Aici rămâne username ca să arate frumos pe ecran
                         "path": f"Shared with me/{owner.username}",
                         "type": "folder",
                         "is_virtual": True
                     })
 
-        # NIVELUL 2: Conținutul unui user specific
         elif len(parts) == 2:
             target_user = db.query(User).filter(User.username == parts[1]).first()
             if target_user:
@@ -489,6 +328,7 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
                         "path": record.file_path,
                         "size": 0,
                         "username": target_user.username,
+                        "owner_id": target_user.id, # 2. MODIFICAT AICI: Trimitem ID-ul către React
                         "is_shared": True
                     }
                     if ext in media_exts:
@@ -501,9 +341,6 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
             "storage_stats": _calculate_storage_stats(current_user, user_root)
         }
 
-    # ==========================================
-    # 2. SCENARIUL B: FOLDERE FIZICE NORMALE
-    # ==========================================
     try:
         target_dir = safe_join_user_path(str(user_root), path)
         if isinstance(target_dir, str):
@@ -511,15 +348,12 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
     except ValueError:
         target_dir = user_root
 
-    # 🚨 REPARAȚIA AICI: Fără fallback ascuns la Root!
     if not target_dir.exists():
         if path in ("", "."):
             target_dir = user_root
         else:
-            # Auto-reparare: creăm folderul dacă React crede că suntem în el, dar discul e desincronizat
             target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Injectăm manual folderul "Shared with me" doar dacă suntem în rădăcină (HOME)
     if path in ("", "."):
         categories["folders"].append({
             "name": "Shared with me",
@@ -528,10 +362,9 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
             "is_virtual": True,
         })
 
-    # Scanăm fișierele reale de pe disc
     if target_dir.exists() and target_dir.is_dir():
         for full_path in target_dir.iterdir():
-            if full_path.name in (".", "..") or (path in ("", ".") and full_path.name == "Shared with me"):
+            if full_path.name.startswith(".") or (path in ("", ".") and full_path.name == "Shared with me"):
                 continue
                 
             rel_path = full_path.relative_to(user_root).as_posix()
@@ -544,14 +377,14 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
                     "name": full_path.name,
                     "path": rel_path,
                     "size": round(size / 1024, 2),
-                    "username": current_user.username
+                    "username": current_user.username,
+                    "owner_id": current_user.id # 3. MODIFICAT AICI: Trimitem ID-ul către React
                 }
                 if ext in media_exts:
                     categories["media"].append(file_info)
                 else:
                     categories["documents"].append(file_info)
 
-    # Returnăm datele finale
     return {
         "categories": categories,
         "storage_stats": _calculate_storage_stats(current_user, user_root)
@@ -560,7 +393,7 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
 
 @router.get("/file-details/{file_path:path}")
 def get_file_details(file_path: str, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     full_path = safe_join_user_path(user_root, file_path)
 
     if not full_path.exists():
@@ -571,52 +404,8 @@ def get_file_details(file_path: str, current_user: User = Depends(get_current_us
     return {
         "name": full_path.name,
         "modified": mod_date,
-        "full_url": f"/media/{current_user.username}/{full_path.relative_to(user_root).as_posix()}"
+        "full_url": f"/media/{current_user.id}/{full_path.relative_to(user_root).as_posix()}"
     }
 
 
-@router.post("/download-zip")
-def download_zip(filenames: List[str], current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
-    zip_buffer = io.BytesIO()
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for fname in filenames:
-            clean_fname = fname.replace("\\", "/").strip("/")
-            try:
-                fpath = safe_join_user_path(user_root, clean_fname)
-            except ValueError:
-                continue
-            if fpath.exists() and fpath.is_file():
-                zip_file.write(str(fpath), arcname=clean_fname)
-
-    zip_buffer.seek(0)
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": 'attachment; filename="Aether_Files.zip"',
-            "Access-Control-Expose-Headers": "Content-Disposition"
-        }
-    )
-
-class AIControlRequest(BaseModel):
-    action: str
-
-@router.post("/ai/control")
-def control_ai(data: AIControlRequest, current_user: User = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Fără acces.")
-        
-    if data.action == "play":
-        ai_state.status = "running"
-        ai_state.log("Sistem AI REPORNIT de către admin.", "success")
-    elif data.action == "pause":
-        ai_state.status = "paused"
-        ai_state.log("Sistem AI pus în PAUZĂ.", "warning")
-    elif data.action == "stop":
-        ai_state.status = "stopped"
-        ai_state.queue_count = 0
-        ai_state.log("Sistem AI OPRIT. Coada a fost golită forțat.", "error")
-        
-    return {"status": ai_state.status}
