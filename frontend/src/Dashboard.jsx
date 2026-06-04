@@ -15,7 +15,8 @@ import FolderSelector from './FolderSelector';
 import SearchModal from './SearchModal';
 import ShareModal from './ShareModal';
 
-const API_URL = import.meta.env.VITE_API_URL;
+// Punem direct IP-ul pe care îl vede el în Tailscale pentru Pi (.85)
+const API_URL = `http://${window.location.hostname}:8000`;
 
 const Dashboard = ({ setToken }) => {
   const [data, setData] = useState(null);

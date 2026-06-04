@@ -24,7 +24,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / DATABASE_FILENA
 
 CORS_ALLOW_ORIGIN_REGEX = os.getenv(
     "CORS_ALLOW_ORIGIN_REGEX", 
-    r"http://(localhost|127\.0\.0\.1|100\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+):(5173|4173)"
+    r".*"
 )
 
 STORAGE_PATH.mkdir(parents=True, exist_ok=True)

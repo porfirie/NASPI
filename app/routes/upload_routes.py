@@ -29,7 +29,7 @@ def check_upload_status(
     if target_path.startswith("Shared with me"):
         raise HTTPException(status_code=400, detail="Nu poți încărca direct în 'Shared with me'.")
 
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     target_dir = safe_join_user_path(user_root, target_path, create=True)
     final_file_path = target_dir / filename
 
@@ -67,7 +67,7 @@ async def upload_chunk(
     if target_path.startswith("Shared with me"):
         raise HTTPException(status_code=400, detail="Eroare permisiuni.")
 
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     target_dir = safe_join_user_path(user_root, target_path, create=True)
     final_file_path = target_dir / filename
 

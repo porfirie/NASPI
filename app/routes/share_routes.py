@@ -38,7 +38,7 @@ async def share_multiple_files(request: ShareRequest, current_user: models.User 
     if not request.file_paths:
         raise HTTPException(status_code=400, detail="Nu ai selectat niciun fișier.")
 
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     bin_id = str(uuid.uuid4())
     uploaded_count = 0
     errors = []

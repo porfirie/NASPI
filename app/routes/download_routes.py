@@ -23,7 +23,7 @@ class DownloadZipRequest(BaseModel):
 
 @router.post("/prepare-zip")
 def prepare_zip(data: DownloadZipRequest, current_user: User = Depends(get_current_user)):
-    user_root = get_user_path(current_user.username)
+    user_root = get_user_path(current_user.id)
     valid_files = []
     
     for fname in data.paths:

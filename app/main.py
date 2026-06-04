@@ -42,7 +42,7 @@ app = FastAPI(title="NAS Pi Project API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
+    allow_origins=["http://100.89.250.86:5173", "http://100.89.250.85:5173", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -48,14 +48,35 @@ except Exception as e:
 def process_image_with_ai(file_id: int, image_path: str, db_session):
     print(f"\n [AI] START: {Path(image_path).name}", flush=True)
     try:
+        # VERIFICARE 1: Dacă s-a dat STOP între timp, ieșim instant
+        if ai_state.status == "stopped":
+            print("[AI] Oprit forțat înainte de procesare.", flush=True)
+            return
+
         image = Image.open(image_path).convert("RGB")
         image.thumbnail((378, 378))
 
         print(" [AI] Procesez pixelii...", flush=True)
+        
+        # VERIFICARE 2: Imediat înainte de codul greu de PyTorch
+        if ai_state.status == "stopped":
+            return
+
         with torch.no_grad():
             enc_image = model.encode_image(image)
+            
+            # Din nou, verificare de siguranță
+            if ai_state.status == "stopped": return
+            
             prompt = "Describe this image in about 10 words, including objects, colors, and any notable features."
+            
+            # Aici este operația masivă de 100% CPU:
             answer = model.answer_question(enc_image, prompt, tokenizer)
+
+        # VERIFICARE 3: După ce a terminat matematica, verificăm dacă mai salvăm în DB
+        if ai_state.status == "stopped":
+            print("[AI] Procesat, dar aruncat la gunoi pentru că sistemul e STOPPED.", flush=True)
+            return
 
         print(f" [AI] REZULTAT: {answer}", flush=True)
 
@@ -64,10 +85,13 @@ def process_image_with_ai(file_id: int, image_path: str, db_session):
             file_record.ai_tags = answer
             db_session.commit()
             print(" [AI] Totul a fost salvat cu succes!", flush=True)
+            
     except Exception as e:
         print(f"[AI] Eroare la procesare: {e}", flush=True)
         import traceback
         traceback.print_exc()
+        
+
 def ai_worker_sync(file_id: int, image_path: str):
     # Deschidem o conexiune sigură cu baza de date
     db_session = SessionLocal()
@@ -76,6 +100,9 @@ def ai_worker_sync(file_id: int, image_path: str):
     finally:
         # E CRUCIAL să o închidem, altfel Pi-ul rămâne fără memorie!
         db_session.close()
+
+
+
 
 async def ai_background_worker(file_id: int, image_path: str):
     try:

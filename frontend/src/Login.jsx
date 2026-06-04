@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Lock, User, ArrowRight } from 'lucide-react';
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = `http://${window.location.hostname}:8000`;
 
 const Login = ({ setToken }) => {
   const [username, setUsername] = useState('');
