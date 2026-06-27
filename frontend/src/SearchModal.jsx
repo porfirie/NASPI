@@ -158,8 +158,11 @@ const SearchModal = ({ isOpen, onClose, API_URL, onFileSelect }) => {
             }
 
             // 4. Construim link-ul corect pentru endpoint-ul tău de /media
+           // 4. Construim link-ul corect pentru endpoint-ul de /media (acum protejat -> token + cale codată)
             const baseUrl = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
-            const mediaUrl = `${baseUrl}/media/${file.owner_id}/${folderPath}${file.name}`;
+            const rawMediaPath = `${folderPath}${file.name}`;
+            const encodedMediaPath = rawMediaPath.split('/').map(encodeURIComponent).join('/');
+            const mediaUrl = `${baseUrl}/media/${file.owner_id}/${encodedMediaPath}?token=${encodeURIComponent(token || '')}`;
             
             return (
               <div 

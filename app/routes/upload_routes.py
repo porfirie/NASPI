@@ -9,7 +9,7 @@ from app.auth import get_current_user
 from app.database import get_db
 from app.models import FileIndex, User
 from app.utils import get_dir_size, get_user_path, safe_join_user_path, get_temp_file_path
-from app.services.ai_service import ai_background_worker
+from app.services.ai_service import enqueue_image
 from app.events import manager, ai_state
 
 router = APIRouter()
@@ -97,9 +97,8 @@ async def upload_chunk(
         db.commit()
         db.refresh(new_file_index)
 
-        # Trimitem la AI Worker
-        background_tasks.add_task(ai_background_worker, new_file_index.id, str(final_file_path))
-        ai_state.queue_count += 1
+        # Trimitem la AI Worker prin COADĂ (procesare una pe rând, fără crash la RAM)
+        enqueue_image(new_file_index.id, str(final_file_path))
         ai_state.log(f"UPLOAD: '{filename}' salvat.", "info")
 
         # Anunțăm interfața să dea refresh
@@ -109,3 +108,4 @@ async def upload_chunk(
 
     # Dacă nu e gata, spunem interfeței să trimită următoarea bucată
     return {"status": "uploading", "uploadedBytes": current_temp_size}
+    

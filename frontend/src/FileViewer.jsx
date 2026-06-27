@@ -24,20 +24,24 @@ const FileViewer = ({ isOpen, onClose, currentFile, allFiles, apiUrl }) => {
 
   // Dacă e din Search folosim standalone, altfel folosim lista normală
   const file = standaloneFile || allFiles[index];
-  
+
   const isImage = file.name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
   const isVideo = file.name.match(/\.(mp4|mov|avi|webm)$/i);
 
   // REPARAȚIE CRITICĂ: Folosim calea completă, nu doar numele!
   // Dacă fișierul vine din Dashboard, .path este deja calea completă.
   // Dacă vine din Search, ne asigurăm că îl construim corect.
-  const filePath = (file.path && file.path !== "Root" && !file.path.includes(file.name)) 
-      ? `${file.path}/${file.name}` 
+  const filePath = (file.path && file.path !== "Root" && !file.path.includes(file.name))
+      ? `${file.path}/${file.name}`
       : (file.path && file.path !== "Root" ? file.path : file.name);
 
- 
-
-  const fileUrl = `${apiUrl}/media/${file.owner_id}/${filePath}`;
+  // NOU: endpoint-ul /media e acum protejat de autentificare.
+  // Tag-urile <img>/<video>/<a download> nu pot trimite header Authorization,
+  // așa că atașăm token-ul ca query param. Codăm fiecare segment al căii ca să
+  // funcționeze și cu nume de fișiere cu spații / diacritice.
+  const token = localStorage.getItem('token');
+  const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
+  const fileUrl = `${apiUrl}/media/${file.owner_id}/${encodedPath}?token=${encodeURIComponent(token || '')}`;
 
   // Navigarea stânga/dreapta merge doar dacă NU suntem în modul "Standalone / Search"
   const nextFile = () => {
@@ -48,7 +52,7 @@ const FileViewer = ({ isOpen, onClose, currentFile, allFiles, apiUrl }) => {
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex flex-col items-center justify-center p-4"
     >
@@ -94,17 +98,17 @@ const FileViewer = ({ isOpen, onClose, currentFile, allFiles, apiUrl }) => {
             className="max-w-5xl max-h-[80vh] flex items-center justify-center pointer-events-auto"
           >
             {isImage && (
-              <img 
-                src={fileUrl} 
-                alt={file.name} 
+              <img
+                src={fileUrl}
+                alt={file.name}
                 className="max-w-full max-h-[85vh] md:max-h-[80vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
               />
             )}
 
             {isVideo && (
-              <video 
-                src={fileUrl} 
-                controls 
+              <video
+                src={fileUrl}
+                controls
                 autoPlay
                 className="max-w-full max-h-[85vh] md:max-h-[80vh] w-auto h-auto rounded-lg shadow-2xl outline-none"
               />

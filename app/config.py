@@ -23,8 +23,8 @@ DATABASE_FILENAME = os.getenv("DATABASE_FILENAME", "nas_database.db")
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / DATABASE_FILENAME}")
 
 CORS_ALLOW_ORIGIN_REGEX = os.getenv(
-    "CORS_ALLOW_ORIGIN_REGEX", 
-    r".*"
+    "CORS_ALLOW_ORIGIN_REGEX",
+    r"https?://(localhost|127\.0\.0\.1|100\.\d+\.\d+\.\d+):5173"
 )
 
 STORAGE_PATH.mkdir(parents=True, exist_ok=True)

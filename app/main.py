@@ -3,10 +3,10 @@ import platform
 import psutil
 import shutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.events import manager, ai_state
+from app.services.ai_service import ai_worker_loop
 
 try:
     from app.config import CORS_ALLOW_ORIGIN_REGEX, STORAGE_PATH
@@ -47,7 +47,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.mount("/media", StaticFiles(directory=str(STORAGE_PATH)), name="media")
+
+# IMPORTANT: am eliminat mount-ul public StaticFiles pe /media.
+# Înainte, `app.mount("/media", StaticFiles(directory=STORAGE_PATH))` expunea TOATE
+# fișierele tuturor utilizatorilor fără niciun fel de autentificare.
+# Acum fișierele sunt servite prin endpoint-ul securizat GET /media/{owner_id}/{file_path}
+# din file_routes.py, care verifică proprietarul sau un share valid.
+
 app.router.include_router(auth_router)
 app.router.include_router(file_router)
 app.router.include_router(admin_router)
@@ -116,6 +122,7 @@ async def monitor_system():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(monitor_system())
+    asyncio.create_task(ai_worker_loop())
 
 
 @app.websocket("/ws")

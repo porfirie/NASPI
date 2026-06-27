@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import or_, cast, String
 from sqlalchemy.orm import Session
 
@@ -13,13 +14,13 @@ from sqlalchemy.orm import Session
 from app.events import manager
 
 try:
-    from app.auth import get_current_user
+    from app.auth import get_current_user, get_current_user_media
     from app.database import get_db
     from app.models import FileIndex, SharedFile, User
     from app.utils import get_user_path, safe_join_user_path, _calculate_storage_stats
     from app.schemas import FolderCreate, MoveRequest, CopyFilesRequest, RenameFolderRequest, DeleteMultipleRequest
 except ImportError:
-    from app.auth import get_current_user
+    from app.auth import get_current_user, get_current_user_media
     from app.database import get_db
     from app.models import FileIndex, SharedFile, User
     from app.utils import get_user_path, safe_join_user_path, _calculate_storage_stats
@@ -192,7 +193,6 @@ async def rename_folder(data: RenameFolderRequest, db: Session = Depends(get_db)
     await manager.broadcast({"type": "REFRESH_FILES", "message": "Folder redenumit"})
     return {"status": "ok", "new_path": new_prefix}
 
-
 @router.post("/sync-db")
 def sync_database(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     user_root = get_user_path(current_user.id)
@@ -207,8 +207,16 @@ def sync_database(db: Session = Depends(get_db), current_user: User = Depends(ge
     added_count = 0
     removed_count = 0
 
-    for dirpath, _, filenames in os.walk(user_root):
+    for dirpath, dirnames, filenames in os.walk(user_root):
+        # 1. Nu intra în foldere ascunse (.temp, .temp_uploads, .cache etc.)
+        #    Modificarea lui dirnames "pe loc" oprește os.walk să coboare în ele.
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+
         for fname in filenames:
+            # 2. Sări peste fișiere ascunse (.part, .DS_Store etc.)
+            if fname.startswith("."):
+                continue
+
             file_path = os.path.join(dirpath, fname)
             rel_dir = os.path.relpath(dirpath, user_root)
             if rel_dir == ".":
@@ -234,8 +242,6 @@ def sync_database(db: Session = Depends(get_db), current_user: User = Depends(ge
 
     db.commit()
     return {"message": "Sincronizare completă!", "added": added_count, "removed": removed_count}
-
-
 
 
 @router.delete("/delete/{file_path:path}")
@@ -288,24 +294,24 @@ async def delete_multiple(data: DeleteMultipleRequest, current_user: User = Depe
 @router.get("/dashboard")
 def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     media_exts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.mkv']
-    
+
     # 1. MODIFICAT AICI: Folosim ID-ul pentru a afla folderul fizic!
     user_root = Path(get_user_path(current_user.id))
-    
+
     categories = {"folders": [], "media": [], "documents": []}
 
     if path.startswith("Shared with me"):
         parts = path.split("/")
-        
+
         if len(parts) == 1:
             shared_records = db.query(SharedFile).filter(SharedFile.shared_with_id == current_user.id).all()
             unique_owners = {r.owner_id for r in shared_records if not r.expires_at or r.expires_at > datetime.utcnow()}
-            
+
             for owner_id in unique_owners:
                 owner = db.query(User).filter(User.id == owner_id).first()
                 if owner:
                     categories["folders"].append({
-                        "name": owner.username, # Aici rămâne username ca să arate frumos pe ecran
+                        "name": owner.username,  # Aici rămâne username ca să arate frumos pe ecran
                         "path": f"Shared with me/{owner.username}",
                         "type": "folder",
                         "is_virtual": True
@@ -318,7 +324,7 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
                     SharedFile.shared_with_id == current_user.id,
                     SharedFile.owner_id == target_user.id
                 ).all()
-                
+
                 for record in shared_records:
                     if record.expires_at and record.expires_at < datetime.utcnow():
                         continue
@@ -328,7 +334,7 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
                         "path": record.file_path,
                         "size": 0,
                         "username": target_user.username,
-                        "owner_id": target_user.id, # 2. MODIFICAT AICI: Trimitem ID-ul către React
+                        "owner_id": target_user.id,  # 2. MODIFICAT AICI: Trimitem ID-ul către React
                         "is_shared": True
                     }
                     if ext in media_exts:
@@ -366,7 +372,7 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
         for full_path in target_dir.iterdir():
             if full_path.name.startswith(".") or (path in ("", ".") and full_path.name == "Shared with me"):
                 continue
-                
+
             rel_path = full_path.relative_to(user_root).as_posix()
             if full_path.is_dir():
                 categories["folders"].append({"name": full_path.name, "path": rel_path, "type": "folder"})
@@ -378,7 +384,7 @@ def get_dashboard_data(path: str = "", db: Session = Depends(get_db), current_us
                     "path": rel_path,
                     "size": round(size / 1024, 2),
                     "username": current_user.username,
-                    "owner_id": current_user.id # 3. MODIFICAT AICI: Trimitem ID-ul către React
+                    "owner_id": current_user.id  # 3. MODIFICAT AICI: Trimitem ID-ul către React
                 }
                 if ext in media_exts:
                     categories["media"].append(file_info)
@@ -408,4 +414,47 @@ def get_file_details(file_path: str, current_user: User = Depends(get_current_us
     }
 
 
+# ============================================================================
+# NOU: Servire SECURIZATĂ a fișierelor (înlocuiește vechiul mount public /media)
+# ============================================================================
+@router.get("/media/{owner_id}/{file_path:path}")
+def serve_media(
+    owner_id: int,
+    file_path: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_media),
+):
+    """
+    Servește un fișier fizic verificând permisiunile.
+    Reguli de acces:
+      - Dacă owner_id == utilizatorul curent -> e fișierul lui, are voie.
+      - Altfel -> trebuie să existe un share VALID (neexpirat) către el
+        pentru exact acea cale.
+    Token-ul vine din ?token=... (sau header Authorization) prin
+    dependența get_current_user_media.
+    """
+    # 1. Autorizare
+    if owner_id != current_user.id:
+        share = db.query(SharedFile).filter(
+            SharedFile.owner_id == owner_id,
+            SharedFile.shared_with_id == current_user.id,
+            SharedFile.file_path == file_path,
+        ).first()
 
+        if not share:
+            raise HTTPException(status_code=403, detail="Nu ai acces la acest fișier.")
+        if share.expires_at and share.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=403, detail="Accesul partajat a expirat.")
+
+    # 2. Rezolvăm calea fizică în siguranță (anti path-traversal)
+    owner_root = get_user_path(owner_id)
+    try:
+        full_path = safe_join_user_path(owner_root, file_path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Cale invalidă.")
+
+    if not full_path.exists() or not full_path.is_file():
+        raise HTTPException(status_code=404, detail="Fișier negăsit.")
+
+    # FileResponse fără filename => servire inline (bun pentru <img>/<video>)
+    return FileResponse(path=str(full_path))

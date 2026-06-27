@@ -278,17 +278,27 @@ const Dashboard = ({ setToken }) => {
 
   // NOUA FUNCȚIE CU SISTEM DE BILET
   const handleBulkDownload = async () => {
-    const filesToDownload = selectedFiles.filter(f => !f.endsWith('/'));
+    // Detectăm folderele REAL: comparăm selecția cu lista de foldere din date,
+    // nu după "/" final (path-urile de folder nu se termină cu slash, deci
+    // vechiul filtru .endsWith('/') le rata).
+    const folderPaths = (data?.categories?.folders || []).map(f => f.path);
+    const selectedFolders = selectedFiles.filter(p => folderPaths.includes(p));
+    const filesToDownload = selectedFiles.filter(p => !folderPaths.includes(p));
+
+    if (selectedFolders.length > 0) {
+      alert("Descărcarea de foldere nu este încă disponibila. Selectează doar fișiere.");
+      return;
+    }
 
     if (filesToDownload.length === 0) {
-      alert("Ai selectat doar foldere. Deocamdată poți descărca doar fișiere.");
+      alert("Nu ai selectat niciun fișier.");
       return;
     }
 
     const token = localStorage.getItem('token');
 
-    // SCENARIUL 1: 1 singur fișier
-    if (filesToDownload.length === 1 && !selectedIsFolder) {
+    // SCENARIUL 1: 1 singur fișier (garantat fișier, folderele au fost excluse mai sus)
+    if (filesToDownload.length === 1) {
       const encodedPath = filesToDownload[0].split('/').map(encodeURIComponent).join('/');
       window.location.href = `${API_URL}/download/${encodedPath}${token ? `?access_token=${encodeURIComponent(token)}` : ''}`;
 
@@ -309,7 +319,8 @@ const Dashboard = ({ setToken }) => {
       const sessionId = response.data.session_id;
 
       // Declansam descărcarea prin browser
-      window.location.href = `${API_URL}/download-zip/${sessionId}`;
+      // NOU: /download-zip e acum protejat -> atașăm token-ul (navigarea browser nu trimite header)
+      window.location.href = `${API_URL}/download-zip/${sessionId}${token ? `?access_token=${encodeURIComponent(token)}` : ''}`;
 
     } catch (err) {
       console.error("Eroare la pregătirea arhivei:", err);

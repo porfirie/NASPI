@@ -60,3 +60,9 @@ Ce am schimbat (Optimizări & Arhitectură Pi)
     Am introdus un endpoint batch de ștergere: /delete-multiple.
 
     Am actualizat frontend-ul să folosească endpointul de ștergere batch.
+
+
+
+    transformers==4.52.4
+tokenizers==0.21.1
+# NU face upgrade la transformers 5.x — strică moondream (all_tied_weights_keys)
