@@ -1,64 +1,54 @@
 import os
-import warnings
-warnings.filterwarnings("ignore", message=".*mkldnn_matmul.*")
-from pathlib import Path
-
-try:
-    from app.config import HF_HOME, MODEL_ID
-except ImportError:
-    from app.config import HF_HOME, MODEL_ID
-
-# IMPORTANT: env-ul TREBUIE setat înainte de importul transformers/torch
-os.environ["HF_HOME"] = str(HF_HOME)
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["OMP_NUM_THREADS"] = "4"
-os.environ["MKL_NUM_THREADS"] = "4"
-
+import io
+import base64
 import asyncio
 import time
-import torch
+from pathlib import Path
+
+import requests
 from PIL import Image
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
-try:
-    from app.models import FileIndex
-    from app.events import ai_state
-    from app.database import SessionLocal
-except ImportError:
-    from app.models import FileIndex
-    from app.events import ai_state
-    from app.database import SessionLocal
+from app.models import FileIndex
+from app.events import ai_state
+from app.database import SessionLocal
 
-torch.set_num_threads(4)
+# ============================================================================
+# Configurare: nu mai încărcăm moondream în PyTorch (bfloat16 emulat = lent).
+# Inferența o face acum llama-server (GGUF), care ține modelul cald în RAM
+# și răspunde prin endpoint compatibil OpenAI. Vezi serviciul `llama-vision`.
+# URL-ul poate fi suprascris din mediu dacă muți serverul pe alt port.
+# ============================================================================
+LLAMA_SERVER_URL = os.environ.get(
+    "LLAMA_SERVER_URL", "http://127.0.0.1:8080/v1/chat/completions"
+)
+
+# Același prompt ca în versiunea veche, pentru rezultate comparabile.
+AI_PROMPT = (
+    "Describe this image in about 20 words, "
+    "including objects, colors, and any notable features."
+)
+
+# Marjă generoasă: encode + generare durează câteva secunde pe Pi.
+REQUEST_TIMEOUT = 180  # secunde
 
 print("=" * 50, flush=True)
-print(" Încărcăm modelul AI în memorie...", flush=True)
+print(f" AI Vision: folosim llama-server pe {LLAMA_SERVER_URL}", flush=True)
 
+# Verificare opțională la pornire: răspunde serverul?
 try:
-    # NOTĂ: moondream2 e un model QUANTIZAT (greutățile sunt dequantizate în
-    # bfloat16 la rulare). NU forța .float() sau .half() — strică quantizarea
-    # sau sparge RAM-ul. Bfloat16 e singura variantă coerentă pentru acest model.
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16
-    ).to("cpu")
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    model.eval()
-    print(f" [DEBUG] dtype real al modelului: {next(model.parameters()).dtype}", flush=True)
-    print(" AI Vision este GATA!", flush=True)
+    _health_url = LLAMA_SERVER_URL.replace("/v1/chat/completions", "/health")
+    if requests.get(_health_url, timeout=5).ok:
+        print(" AI Vision este GATA!", flush=True)
+    else:
+        print(" ATENȚIE: llama-server a răspuns, dar nu cu status OK.", flush=True)
 except Exception as e:
-    print(f" EROARE CRITICĂ la încărcare: {e}", flush=True)
-    import traceback
-    traceback.print_exc()
-    raise
+    print(f" ATENȚIE: nu pot contacta llama-server încă ({e}).", flush=True)
+    print("          Pornește-l: sudo systemctl start llama-vision", flush=True)
 
 
 # ============================================================================
 # COADĂ CU UN SINGUR WORKER
-# Pozele nu mai pornesc câte un thread fiecare (cauza crash-ului la RAM).
+# Pozele nu pornesc câte un thread fiecare (cauza crash-ului la RAM).
 # Intră într-o coadă și sunt procesate UNA CÂTE UNA de un singur worker permanent.
 # ============================================================================
 
@@ -67,25 +57,44 @@ ai_queue: "asyncio.Queue" = asyncio.Queue()
 
 
 def _process_one(file_id: int, image_path: str, db_session):
-    """Procesarea efectivă a unei singure imagini (cod sincron, greu de CPU)."""
+    """Procesarea efectivă a unei singure imagini.
+
+    Singura schimbare față de versiunea veche: în loc de model.encode_image +
+    model.answer_question (PyTorch), redimensionăm poza și o trimitem la
+    llama-server. Restul fluxului (DB, log-uri) e identic.
+    """
     print(f"\n [AI] START: {Path(image_path).name}", flush=True)
     try:
+        # Redimensionăm la 378px ca înainte: encode rapid + payload mic.
         image = Image.open(image_path).convert("RGB")
         image.thumbnail((378, 378))
 
-        with torch.no_grad():
-            t0 = time.time()
-            enc_image = model.encode_image(image)
-            t1 = time.time()
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=90)
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        data_url = f"data:image/jpeg;base64,{b64}"
 
-            prompt = "Describe this image in about 10 words, including objects, colors, and any notable features."
-            # max_new_tokens limitează cât text generează -> mai puține tokenuri = mai rapid.
-            # Pentru tag-uri de căutare, 40 e suficient.
-            answer = model.answer_question(
-                enc_image, prompt, tokenizer, max_new_tokens=40
-            )
-            t2 = time.time()
-            print(f" [TIMP] encode_image: {t1-t0:.1f}s | answer: {t2-t1:.1f}s", flush=True)
+        payload = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": AI_PROMPT},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            "temperature": 0.1,
+            # Tag-uri scurte pentru căutare -> puține tokenuri = mai rapid.
+            "max_tokens": 80,
+        }
+
+        t0 = time.time()
+        resp = requests.post(LLAMA_SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        answer = resp.json()["choices"][0]["message"]["content"].strip()
+        t1 = time.time()
+        print(f" [TIMP] llama-server: {t1 - t0:.1f}s", flush=True)
 
         print(f" [AI] REZULTAT: {answer}", flush=True)
 
@@ -95,6 +104,9 @@ def _process_one(file_id: int, image_path: str, db_session):
             db_session.commit()
             print(" [AI] Salvat cu succes!", flush=True)
 
+    except requests.exceptions.RequestException as e:
+        # Server picat / timeout / rețea — tratat separat ca să fie clar în log.
+        print(f"[AI] Eroare de comunicare cu llama-server: {e}", flush=True)
     except Exception as e:
         print(f"[AI] Eroare la procesare: {e}", flush=True)
         import traceback
@@ -153,8 +165,8 @@ async def ai_worker_loop():
         ai_state.log(f"AI ENGINE: Procesez '{filename}'...", "warning")
 
         try:
-            # Rulează inferența pe un thread (ca să nu blocheze event-loop-ul),
-            # dar UNUL SINGUR pe rând, fiindcă worker-ul așteaptă aici până termină.
+            # Rulează cererea pe un thread (ca să nu blocheze event-loop-ul),
+            # dar UNA SINGURĂ pe rând, fiindcă worker-ul așteaptă aici până termină.
             await asyncio.to_thread(_process_one_with_db, file_id, image_path)
             ai_state.log(f"AI ENGINE: Gata '{filename}'.", "success")
         except Exception as e:
